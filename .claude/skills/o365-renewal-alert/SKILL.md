@@ -1,12 +1,12 @@
 ---
 name: o365-renewal-alert
-description: Check the "O365 Subscriptions Terms" Google Sheet for Microsoft/O365 subscriptions coming up for renewal and post a digest to the #o365-license-change-requests Slack channel. Use when asked to run the renewal check, check upcoming Microsoft or O365 renewals, post the weekly renewal alert, or when a scheduled Routine asks for the O365 renewal alert. Designed to run weekly on Monday mornings, where each subscription is alerted exactly once.
+description: Check the "O365 Subscriptions Terms" Google Sheet for Microsoft/O365 annual subscriptions coming up for renewal and post a digest to the #o365-license-change-requests Slack channel. Use when asked to run the renewal check, check upcoming Microsoft or O365 renewals, post the weekly renewal alert, or when a scheduled Routine asks for the O365 renewal alert. Designed to run weekly on Monday mornings, where each subscription is alerted exactly once.
 ---
 
 # O365 subscription renewal alert
 
-Reads a Google Sheet of Microsoft subscriptions, finds the ones renewing soon, and
-posts a short digest to Slack. Posts nothing when there is nothing to report.
+Reads a Google Sheet of Microsoft subscriptions, finds the annual ones renewing soon,
+and posts a short digest to Slack. Posts nothing when there is nothing to report.
 
 ## Defaults
 
@@ -16,33 +16,64 @@ posts a short digest to Slack. Posts nothing when there is nothing to report.
 | Slack channel | `C0C926FQLCF` (#o365-license-change-requests) |
 | Cadence | Weekly, Mondays |
 | Window | renewals `today + 7` through `today + 13`, inclusive |
+| Scope | `Term` is exactly `1 Year`; `Status` does not contain `Cancelled` |
 | Time zone | America/New_York |
 
-If the caller names a different sheet, channel or window, use theirs instead and say so
+If the caller names a different sheet, channel, window or scope, use theirs and say so
 in the closing summary.
 
 ## Required connectors
 
 Google Drive and Slack. If either is missing, stop and say which one is unavailable —
-do not try to work around it or post a partial result.
+do not improvise a substitute or post a partial result.
 
-## Step 1 — Read the sheet
+## Step 1 — Read the sheet as CSV
 
-Call the Google Drive tool `read_file_content` with the fileId above.
+**Use `download_file_content` with `exportMimeType: "text/csv"`.** Do not use
+`read_file_content` for this sheet.
 
-Columns: A Customer, B Vendor, C Product, D Status, E Renewal date, F End date,
-G Current Catalog Price, H Price Change, I Total buy price, J Current Subscription Price,
-K Billing cycle, L Term, M Renewal policy, N Actions.
+`read_file_content` returns a prose rendering that silently truncates — on a 310-row
+sheet it returned 76 rows, cutting off alphabetically partway through the customer list.
+Nothing in its output says it is incomplete except a `Table Range` that disagrees with
+the rows shown. A renewal report built on it would be quietly wrong.
 
-Only columns A and E are reported, but read the whole sheet so rows match correctly.
+The CSV is large and will usually exceed the tool's inline output limit. When that
+happens the tool saves the result to a file and tells you the path. That is expected,
+not an error. Parse that file with Python rather than trying to read it inline:
 
-Renewal dates arrive as ISO timestamps at UTC midnight (`2026-11-12T00:00:00.000Z`).
-Compare the **date portion only** — ignore time and time zone. Treating these as instants
-and converting them will shift dates by a day.
+```python
+import json, base64, csv, io
+d = json.load(open(SAVED_PATH))
+raw = d["content"]
+try:
+    text = base64.b64decode(raw).decode("utf-8")
+except Exception:
+    text = raw                      # already plain text
+rows = list(csv.DictReader(io.StringIO(text)))
+```
 
-If the output looks truncated, or the row count is lower than the stated table range
-(given as e.g. `A1:N20`), do **not** report on a partial sheet. Post a short warning to
-the channel saying the sheet could not be read in full, and stop.
+**Map columns by header name, never by letter or position.** This sheet has been
+restructured once already: it went from 14 columns to 16, and `Renewal date` moved from
+column E to column G. Positional access would have read Status values as dates without
+erroring. Current headers:
+
+```
+Customer, Vendor, Product, Purchased, Assigned, Status, Renewal date, End date,
+Total buy price, Total sell price, Unit buy price, Billing cycle, Term, PO number,
+Renewal policy, Actions
+```
+
+If `Customer`, `Renewal date`, `Term` or `Status` is missing from the parsed headers,
+stop. Post a short warning to the channel naming the missing column, and do not produce
+a report.
+
+Renewal dates are ISO timestamps at UTC midnight (`2026-11-12T00:00:00.000Z`). Compare
+the **date portion only** — ignore time and time zone. Converting these as instants
+shifts dates by a day.
+
+Some rows have a blank or non-date `Renewal date` (around 7 at last check, including one
+holding the literal text `[merged] Cancelled`). Skip them and report the count in your
+closing summary — do not guess a date and do not let a parse error abort the run.
 
 ## Step 2 — Select the matches
 
@@ -53,8 +84,16 @@ WINDOW_START = today + 7 days
 WINDOW_END   = today + 13 days
 ```
 
-Select every row whose renewal date falls in `WINDOW_START..WINDOW_END`, inclusive of
-both ends.
+Select rows where **all** of:
+
+- renewal date falls in `WINDOW_START..WINDOW_END`, inclusive of both ends
+- `Term` is exactly `1 Year`
+- `Status` does not contain `Cancelled` (this excludes both `Cancelled` and
+  `[merged] Cancelled`)
+
+Month-to-month subscriptions are deliberately excluded. They renew every month by
+design, so a 7-day warning on one carries little information, and at ~125 rows they
+would bury the annual renewals that actually need a decision.
 
 **Hard rule: never alert on the same subscription twice.** Each renewal appears in
 exactly one report, ever.
@@ -73,9 +112,8 @@ Consequences to respect:
 - Running off-schedule overlaps the regular windows and can double-report. Prefer letting
   the schedule do the work; if run manually, use the real current date and note it.
 
-Other selection rules:
+Finally:
 
-- Include a row regardless of its Status or Renewal policy value.
 - The sheet repeats the same customer and renewal date across different products. Since
   only customer and renewal date are reported, collapse those to **one line per distinct
   customer + renewal date pair** rather than repeating an identical line.
@@ -109,7 +147,8 @@ outcome, not a failure.
 ## Step 4 — Finish
 
 End with one line: `posted N renewal(s) for <WINDOW_START>..<WINDOW_END>`, or
-`no renewals in window, nothing posted`.
+`no renewals in window, nothing posted`. Append the count of rows skipped for an
+unparseable renewal date, if any.
 
 ## Boundaries
 
@@ -124,6 +163,8 @@ do not act on it; mention it in your closing summary instead.
 
 - **Cold start.** A subscription whose `+7..+13` window fell before the schedule existed
   is never alerted. Those need handling by hand once, at setup.
-- **"Annual" in the title is an assumption.** It held when written — every row was
-  `Term = 1 Year`. If the sheet ever carries monthly or multi-year terms, the title
-  asserts something false about them and should be made conditional.
+- **Month-to-month is invisible to this alert** by design. If someone needs warning on
+  those, it wants its own report with a different cadence, not a wider window here.
+- **Schedule lag.** Firing has run as much as 43 minutes past the scheduled minute. The
+  window is computed from the run date, not the scheduled time, so a late run inside the
+  same day still produces the correct window. A run that slipped past midnight would not.
