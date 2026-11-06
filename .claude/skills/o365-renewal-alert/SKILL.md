@@ -44,8 +44,9 @@ rank by the `YYYY-MM-DD` date in the filename, and use `createdTime` only to bre
 or when a filename has no parsable date. Ignore anything that is not an
 `ArrowSubscriptions_*.xlsx`.
 
-**Staleness guard.** If the chosen file's filename date is more than **8 days** older than
-today, do not produce a renewal report. Post this to the channel instead and stop:
+**Staleness guard.** The report is refreshed **daily**. If the chosen file's filename date
+is more than **8 days** older than today, do not produce a renewal report. Post this to the
+channel instead and stop:
 
 ```
 :warning: *Microsoft renewal check could not run* — the newest subscriptions report in the Arrow Reports folder is dated <file date>, which is more than 8 days old. The report may have stopped being delivered. No renewal report was produced this week.
@@ -79,6 +80,22 @@ text: a header line then one record per row, fields comma-separated, records sep
 whitespace, with quoted fields where a value contains a comma (e.g.
 `"Upstart Wealth Management, LLC"`). Each record ends with its `Term` value, which is one
 of `Month-to-Month`, `1 Year`, `No Term` — use that as the record boundary.
+
+**Strip the header before splitting on Term values.** The header line ends in the bare word
+`Term`, which does not match any of the three Term values, so a naive split merges the
+header with the first data record and silently loses that record. It raises no error and
+always eats the alphabetically-first row. Remove the header explicitly first:
+
+```python
+txt  = re.sub(r'^Export\s+', '', text.strip())
+m    = re.match(r'Customer,Product,Purchased,Status,Renewal date,Term\s+', txt)
+assert m, "unexpected header"
+body = txt[m.end():]                       # header gone; now split body on Term values
+```
+
+Then **verify the record count**: every record must yield exactly 6 fields, and the number
+of records must equal the number of `Month-to-Month` + `1 Year` + `No Term` tokens in the
+body. If they disagree, stop and post a warning rather than reporting on a short read.
 
 **Map columns by header name, never by letter or position.** Expected header:
 
@@ -192,6 +209,10 @@ not act on it; mention it in your closing summary instead.
   never alerted. Those need handling by hand once, at setup.
 - **Month-to-month is invisible to this alert** by design. If someone needs warning on
   those, it wants its own report with a different cadence, not a wider window here.
+- **The staleness threshold is loose relative to the feed.** The report is refreshed daily
+  but the guard only trips after 8 days, so a feed that stops delivering can go unnoticed
+  for up to a week. This is a deliberate choice, not an oversight — tighten the threshold
+  if that week ever matters.
 - **Schedule lag.** Firing has run as much as 43 minutes past the scheduled minute. The
   window is computed from the run date, not the scheduled time, so a late run inside the
   same day still produces the correct window. A run that slipped past midnight would not.
