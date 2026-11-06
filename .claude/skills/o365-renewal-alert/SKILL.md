@@ -176,31 +176,36 @@ Consequences to respect:
 
 Finally:
 
-- The report has multiple products per customer on the same renewal date. Since only
-  customer and renewal date are reported, collapse those to **one line per distinct
-  customer + renewal date pair** rather than repeating an identical line.
-- Sort by renewal date ascending, then customer name.
+- Collapse to **one line per distinct customer + product + renewal date**. The report does
+  contain exact duplicates of all three (4 among the annual rows at last check, e.g. `c1` /
+  `Office 365 E3 (no Teams)` / `2026-11-11` appears twice), and an identical repeated line
+  tells the reader nothing. A customer with two different products renewing on different
+  dates gets two lines — that is correct, not a duplicate.
+- Sort by renewal date ascending, then customer name, then product.
 
 ## Step 4 — Post to Slack
 
 Only if Step 3 found at least one row. Use `slack_send_message` with the channel above.
 
-The message contains **only customer name and renewal date** — no product, seat count,
+The message contains **only customer name, product and renewal date** — no seat count,
 term or status.
 
 The title line is fixed wording. Use it exactly, singular, whether there is one match or
 many:
 
 ```
-:calendar: *Microsoft annual subscription renewal — <WINDOW_START as "Fri, Nov 13"> to <WINDOW_END as "Thu, Nov 19, 2026">*
+:calendar: *Microsoft annual subscription renewal — <WINDOW_START as "Mon, Nov 16"> to <WINDOW_END as "Sun, Nov 22, 2026">*
 
-| Customer | Renewal date |
-|---|---|
-| LN | Sun, Nov 15, 2026 |
-| CDFVA | Tue, Nov 17, 2026 |
+| Customer | Product | Renewal date |
+|---|---|---|
+| CDFVA | Office 365 E3 | Tue, Nov 17, 2026 |
+| CDFVA | Office 365 E1 | Fri, Nov 20, 2026 |
+| KTEFINC | Visio Plan 2 | Sun, Nov 22, 2026 |
 
 Source: ArrowSubscriptions_<file date>.xlsx (Arrow Reports)
 ```
+
+Use the `Product` value from the report verbatim — do not shorten or normalise it.
 
 Markdown tables render correctly in Slack — do not escape the structural `|` characters.
 
