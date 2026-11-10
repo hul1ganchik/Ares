@@ -1,0 +1,12 @@
+AppEvents
+| where TimeGenerated >= datetime({ws}) and TimeGenerated < datetime({we}) and Name == 'Container started'
+| where tostring(Properties.CategoryName) == 'LocalZone Container Windows'
+| extend Acct = tolower(tostring(Properties.Account)) | where Acct != 'os33' and isnotempty(UserAuthenticatedId)
+| summarize arg_max(TimeGenerated, Properties) by U = tolower(UserAuthenticatedId), Acct
+| mv-apply k = bag_keys(Properties) on (
+    where tostring(k) matches regex @'^AntivirusDisplayName\d*$'
+    | extend name = tostring(Properties[tostring(k)])
+    | where isnotempty(name)
+    | summarize Products = make_set(name, 20))
+| extend Count = toint(Properties.AntivirusCount)
+| project U, Acct, Products, Count

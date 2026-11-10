@@ -1,0 +1,6 @@
+AppEvents
+| where TimeGenerated > ago(7d) and Name == 'Session Score'
+| extend Acct = tolower(tostring(Properties.Account))
+| where Acct contains 'name1' or Acct contains 'name2'
+| summarize Users = dcount(UserAuthenticatedId), Cat = make_set(tostring(Properties.CategoryName), 4) by Acct
+| order by Users desc
